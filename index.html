@@ -723,7 +723,7 @@
         };
 
         // Tags loaded from Google Sheets
-        let componentTags = {};  // { mirror: ['Left missing', 'Right missing', ...], seat: [...], ... }
+        let availableComponentTags = {};  // { mirror: ['Left missing', 'Right missing', ...], seat: [...], ... }
         let ocrApiKey = '';
         let ocrCapturedImage = null;
         let qrScanner = null;
@@ -847,7 +847,7 @@
                 }
                 
                 if (result.status === 'success') {
-                    componentTags = result.tags;
+                    availableComponentTags = result.tags;
                     
                     
                     // Update checklist with tags
@@ -915,7 +915,7 @@
                 if (!container) return;
                 
                 // Find tags for this component (case-insensitive match)
-                const tags = componentTags[comp.id] || componentTags[comp.label.toLowerCase()] || [];
+                const tags = availableComponentTags[comp.id] || availableComponentTags[comp.label.toLowerCase()] || [];
                 
                 if (tags.length === 0) {
                     container.innerHTML = '<span class="tags-loading">No tags available</span>';
@@ -1069,6 +1069,12 @@
 		        photoStream.getTracks().forEach(track => track.stop());
 		        photoStream = null;
 		    }
+		}
+
+		function stopAllCameras() {
+		    stopCamera();
+		    stopOCRCamera();
+		    stopQRScanner();
 		}
 		
 		function togglePhotoSection() {
@@ -1268,16 +1274,14 @@
         // ============================================
         
         function validateFormCompleteness() {
-            const btn = document.getElementById('submitBtn');
-            
             const hasCity = !!inspectionData.city;
             const hasInspector = !!inspectionData.inspector;
             const hasVehicleId = !!inspectionData.vehicleId;
             const allComponentsChecked = components.every(comp => inspectionData.components[comp.id] !== null);
-            
+
             const isValid = hasCity && hasInspector && hasVehicleId && allComponentsChecked;
-                 
-            btn.disabled = !isValid;
+
+            submitBtn.disabled = !isValid;
         }
 
         // ============================================
@@ -1323,18 +1327,15 @@
 			}
 
 			// Stop any active cameras before sending
-			stopCamera();
-			stopOCRCamera();
-			stopQRScanner();
+			stopAllCameras();
 			
             inspectionData.timestamp = new Date().toISOString();
             inspectionData.notes = document.getElementById('notes').value;
             
             document.getElementById('loading').classList.remove('hidden');
-            document.getElementById('submitBtn').disabled = true;
+            submitBtn.disabled = true;
             
             // Use .then() instead of await for Safari iOS compatibility
-			//alert('SAFARI DEBUG: about to call sendToGoogleSheets');
             sendToGoogleSheets(inspectionData).then(function() {
                 showMessage('✅ Inspection submitted successfully!', 'success');
                 setTimeout(function() {
@@ -1349,50 +1350,26 @@
         }
 
         async function sendToGoogleSheets(data) {
-			//alert('SAFARI DEBUG 2: inside sendToGoogleSheets');
-			const formData = {
-		        timestamp: data.timestamp,
-		        city: data.city,
-		        inspector: data.inspector,
-		        inspectorEmail: data.inspectorEmail,
-		        vehicleId: data.vehicleId,
-		        idMode: data.idMode,
-		        photos: data.photos,
-		        mirror: data.components.mirror,
-		        mirrorTags: (data.componentTags.mirror || []).join(', '),
-		        seat: data.components.seat,
-		        seatTags: (data.componentTags.seat || []).join(', '),
-		        topcase: data.components.topcase,
-		        topcaseTags: (data.componentTags.topcase || []).join(', '),
-		        wheel: data.components.wheel,
-		        wheelTags: (data.componentTags.wheel || []).join(', '),
-		        handlebar: data.components.handlebar,
-		        handlebarTags: (data.componentTags.handlebar || []).join(', '),
-		        display: data.components.display,
-		        displayTags: (data.componentTags.display || []).join(', '),
-		        grips: data.components.grips,
-		        gripsTags: (data.componentTags.grips || []).join(', '),
-		        phoneholder: data.components.phoneholder,
-		        phoneholderTags: (data.componentTags.phoneholder || []).join(', '),
-		        lights: data.components.lights,
-		        lightsTags: (data.componentTags.lights || []).join(', '),
-		        stickers: data.components.stickers,
-		        stickersTags: (data.componentTags.stickers || []).join(', '),
-		        cleanliness: data.components.cleanliness,
-		        cleanlinessTags: (data.componentTags.cleanliness || []).join(', '),
-		        helmets: data.components.helmets,
-		        helmetsTags: (data.componentTags.helmets || []).join(', '),
-		        hygiene: data.components.hygiene,
-		        hygieneTags: (data.componentTags.hygiene || []).join(', '),
-		        notes: data.notes
-		    };
+			const componentFields = {};
+		        components.forEach(comp => {
+		            componentFields[comp.id] = data.components[comp.id];
+		            componentFields[comp.id + 'Tags'] = (data.componentTags[comp.id] || []).join(', ');
+		        });
+		        const formData = {
+		            timestamp: data.timestamp,
+		            city: data.city,
+		            inspector: data.inspector,
+		            inspectorEmail: data.inspectorEmail,
+		            vehicleId: data.vehicleId,
+		            idMode: data.idMode,
+		            photos: data.photos,
+		            ...componentFields,
+		            notes: data.notes
+		        };
 
-			//alert('SAFARI DEBUG 2b: formData built, photos=' + data.photos.length);
-			
 		    // Save to localStorage as backup
 		    try {
-		        const backup = JSON.parse(JSON.stringify(formData));
-		        delete backup.photos;
+		        const { photos: _photos, ...backup } = formData;
 		        const inspections = JSON.parse(localStorage.getItem('inspections') || '[]');
 		        inspections.push(backup);
 		        localStorage.setItem('inspections', JSON.stringify(inspections));
@@ -1401,7 +1378,6 @@
 		    }
 		
 		    try {
-		    	//alert('SAFARI DEBUG 3: about to fetch');
 		        let response;
 				try {
 				    response = await fetch(SCRIPT_URL, {
@@ -1413,10 +1389,10 @@
 					
 		            
 		            if (fetchErr.name === 'AbortError') {
-		                showMessage('❌ [ERR_TIMEOUT] Request timed out. Please try again.', 'error');
+		                showMessage('❌ ' + getErrorMessage('ERR_TIMEOUT'), 'error');
 		                throw new Error('ERR_TIMEOUT');
 		            }
-		            showMessage('❌ [ERR_NETWORK] Network error. Check your connection.', 'error');
+		            showMessage('❌ ' + getErrorMessage('ERR_NETWORK'), 'error');
 		            throw new Error('ERR_NETWORK');
 		        }
 		
@@ -1479,19 +1455,16 @@
         // ============================================
         
         function showMessage(text, type) {
-            const successEl = document.getElementById('successMessage');
-            const errorEl = document.getElementById('errorMessage');
-            
             if (type === 'success') {
-                successEl.textContent = text;
-                successEl.classList.remove('hidden');
-                errorEl.classList.add('hidden');
-                setTimeout(() => { successEl.classList.add('hidden'); }, 3000);
+                successMessageEl.textContent = text;
+                successMessageEl.classList.remove('hidden');
+                errorMessageEl.classList.add('hidden');
+                setTimeout(() => { successMessageEl.classList.add('hidden'); }, 3000);
             } else {
-                errorEl.textContent = text;
-                errorEl.classList.remove('hidden');
-                successEl.classList.add('hidden');
-                setTimeout(() => { errorEl.classList.add('hidden'); }, 5000);
+                errorMessageEl.textContent = text;
+                errorMessageEl.classList.remove('hidden');
+                successMessageEl.classList.add('hidden');
+                setTimeout(() => { errorMessageEl.classList.add('hidden'); }, 5000);
             }
             
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1511,6 +1484,11 @@
 
         const vehicleSection = document.getElementById('vehicleSection');
         const stickyBar = document.getElementById('vehicleStickyBar');
+        const submitBtn = document.getElementById('submitBtn');
+        const successMessageEl = document.getElementById('successMessage');
+        const errorMessageEl = document.getElementById('errorMessage');
+        const stickyVehicleIdEl = document.getElementById('stickyVehicleId');
+        const stickyVehicleCityEl = document.getElementById('stickyVehicleCity');
 
         const stickyObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
@@ -1527,8 +1505,8 @@
         stickyObserver.observe(vehicleSection);
 
         function updateStickyBar() {
-		    document.getElementById('stickyVehicleId').textContent = inspectionData.vehicleId || '';
-		    document.getElementById('stickyVehicleCity').textContent = inspectionData.city || '';
+		    stickyVehicleIdEl.textContent = inspectionData.vehicleId || '';
+		    stickyVehicleCityEl.textContent = inspectionData.city || '';
 		}
 		
     </script>
