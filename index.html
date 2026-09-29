@@ -784,7 +784,7 @@
                 
                 if (result.status === 'success') {
                     const select = document.getElementById('inspectorSelect');
-                    select.innerHTML = '<option value="">-- Select Inspector --</option>';
+                    select.innerHTML = '<option value="">Select Inspector:</option>';
                     
                     result.inspectors.forEach(inspector => {
                         const option = document.createElement('option');
