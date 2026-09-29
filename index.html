@@ -743,17 +743,17 @@
                 inspectionData.city = savedCity;
             }
             
-            // Load inspectors from Google Sheets
+            // Build checklist first so cached tags can render into it
+            buildChecklist();
+            
+            // Load inspectors from Google Sheets (cached copy shown instantly)
             loadInspectors();
             
-            // Load tags from Google Sheets
+            // Load tags from Google Sheets (cached copy shown instantly)
             loadTags();
             
             // Load OCR key
             loadOcrKey();
-            
-            // Build checklist (tags will be added when loaded)
-            buildChecklist();
             
             // Validate form
             validateFormCompleteness();
@@ -777,63 +777,95 @@
 			});
         }
 
+        // Cache helpers: show last known data instantly, refresh in background
+        function readCache(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function writeCache(key, value) {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                // Storage full or blocked: ignore, app still works without cache
+            }
+        }
+
+        function renderInspectors(inspectors) {
+            const select = document.getElementById('inspectorSelect');
+            const current = inspectionData.inspector || localStorage.getItem('inspectorName');
+            select.innerHTML = '<option value="">Select Inspector:</option>';
+            
+            inspectors.forEach(inspector => {
+                const option = document.createElement('option');
+                option.value = inspector.name;
+                option.textContent = inspector.name;
+                option.dataset.email = inspector.email;
+                select.appendChild(option);
+            });
+            
+            // Restore selected inspector
+            if (current) {
+                select.value = current;
+                const selectedOption = select.options[select.selectedIndex];
+                if (selectedOption && selectedOption.value) {
+                    inspectionData.inspector = current;
+                    inspectionData.inspectorEmail = selectedOption.dataset.email || '';
+                } else {
+                    inspectionData.inspector = '';
+                    inspectionData.inspectorEmail = '';
+                }
+            }
+            
+            validateFormCompleteness();
+        }
+
         async function loadInspectors() {
+            const select = document.getElementById('inspectorSelect');
+            select.addEventListener('change', (e) => {
+                const name = e.target.value;
+                inspectionData.inspector = name;
+                localStorage.setItem('inspectorName', name);
+                
+                const selectedOption = e.target.options[e.target.selectedIndex];
+                inspectionData.inspectorEmail = (selectedOption && selectedOption.dataset.email) || '';
+                
+                validateFormCompleteness();
+            });
+            
+            const cached = readCache('cachedInspectors');
+            if (cached) renderInspectors(cached);
+            
             try {
                 const response = await fetch(SCRIPT_URL + '?action=getInspectors');
                 const result = await response.json();
                 
                 if (result.status === 'success') {
-                    const select = document.getElementById('inspectorSelect');
-                    select.innerHTML = '<option value="">Select Inspector:</option>';
-                    
-                    result.inspectors.forEach(inspector => {
-                        const option = document.createElement('option');
-                        option.value = inspector.name;
-                        option.textContent = inspector.name;
-                        option.dataset.email = inspector.email;
-                        select.appendChild(option);
-                    });
-                    
-                    // Restore saved inspector
-                    const savedInspector = localStorage.getItem('inspectorName');
-                    if (savedInspector) {
-                        select.value = savedInspector;
-                        inspectionData.inspector = savedInspector;
-                        
-                        // Get email
-                        const selectedOption = select.options[select.selectedIndex];
-                        if (selectedOption && selectedOption.dataset.email) {
-                            inspectionData.inspectorEmail = selectedOption.dataset.email;
-                        }
+                    if (JSON.stringify(result.inspectors) !== JSON.stringify(cached)) {
+                        writeCache('cachedInspectors', result.inspectors);
+                        renderInspectors(result.inspectors);
                     }
-                    
-                    select.addEventListener('change', (e) => {
-                        const name = e.target.value;
-                        inspectionData.inspector = name;
-                        localStorage.setItem('inspectorName', name);
-                        
-                        const selectedOption = e.target.options[e.target.selectedIndex];
-                        if (selectedOption && selectedOption.dataset.email) {
-                            inspectionData.inspectorEmail = selectedOption.dataset.email;
-                        }
-                        
-                        validateFormCompleteness();
-                    });
-                    
-                    validateFormCompleteness();
                 } else {
                     console.error('Error loading inspectors:', result.errorCode, result.message);
-                    const select = document.getElementById('inspectorSelect');
-                    select.innerHTML = '<option value="">Error loading inspectors</option>';
+                    if (!cached) select.innerHTML = '<option value="">Error loading inspectors</option>';
                 }
             } catch (error) {
                 console.error('Error loading inspectors:', error);
-                const select = document.getElementById('inspectorSelect');
-                select.innerHTML = '<option value="">Error loading inspectors</option>';
+                if (!cached) select.innerHTML = '<option value="">Error loading inspectors</option>';
             }
         }
 
         async function loadTags() {
+            const cached = readCache('cachedTags');
+            if (cached) {
+                componentTags = cached;
+                updateChecklistTags();
+            }
+            
             try {
                 const response = await fetch(SCRIPT_URL + '?action=getTags');
                 const text = await response.text();
@@ -847,11 +879,11 @@
                 }
                 
                 if (result.status === 'success') {
-                    componentTags = result.tags;
-                    
-                    
-                    // Update checklist with tags
-                    updateChecklistTags();
+                    if (JSON.stringify(result.tags) !== JSON.stringify(cached)) {
+                        componentTags = result.tags;
+                        writeCache('cachedTags', result.tags);
+                        updateChecklistTags();
+                    }
                 } else {
                     console.error('Error loading tags:', result.errorCode, result.message);
                 }
@@ -927,6 +959,10 @@
                     const chip = document.createElement('span');
                     chip.className = 'tag-chip';
                     chip.textContent = tag;
+                    // Keep selection when tags are re-rendered after a background refresh
+                    if ((inspectionData.componentTags[comp.id] || []).includes(tag)) {
+                        chip.classList.add('selected');
+                    }
                     chip.onclick = (e) => {
                         e.stopPropagation();
                         toggleTag(comp.id, tag, chip);
